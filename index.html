@@ -455,34 +455,26 @@ var tvLoaded=false;
 function initCV(){cv=document.getElementById('CV');if(!cv)return;cx=cv.getContext('2d')}
 function loadTV(pid){
   var pair=null;for(var i=0;i<P.length;i++)if(P[i].id===pid)pair=P[i];if(!pair)return;
+  document.getElementById('cTp').textContent=pair.s;
   var area=document.getElementById('chtArea');
   var th=document.body.getAttribute('data-theme')==='dark'?'dark':'light';
   var sym='FX:'+pid;
-  var url='https://s.tradingview.com/widgetembed/?hideideas=1&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=en#%7B%22symbol%22%3A%22'+sym+'%22%2C%22frameElementId%22%3A%22tv_flash%22%2C%22interval%22%3A%221%22%2C%22theme%22%3A%22'+th+'%22%2C%22style%22%3A%221%22%2C%22timezone%22%3A%22Etc%2FUTC%22%2C%22withdateranges%22%3A%221%22%2C%22hide_side_toolbar%22%3A%220%22%2C%22allow_symbol_change%22%3A%220%22%2C%22save_image%22%3A%220%22%2C%22details%22%3A%220%22%2C%22calendar%22%3A%220%22%2C%22hide_volume%22%3A%220%22%2C%22show_popup_button%22%3A%220%22%7D';
-  // Try iframe
-  var ifr=document.createElement('iframe');
-  ifr.src=url;ifr.style.cssText='width:100%;height:100%;border:none;display:block';
-  ifr.id='tvFrame';
-  // Remove old iframe if exists
-  var old=document.getElementById('tvFrame');if(old)old.remove();
-  // Hide canvas, show iframe
-  cv.style.display='none';
-  area.appendChild(ifr);
-  tvLoaded=true;
-  // Fallback: if iframe fails (sandbox), show canvas after 3s
-  setTimeout(function(){
-    try{
-      var f=document.getElementById('tvFrame');
-      if(f&&f.contentWindow&&f.contentDocument&&f.contentDocument.body&&f.contentDocument.body.innerHTML.length>100){
-        // TradingView loaded OK
-      }else{throw 'nope'}
-    }catch(e){
-      // Iframe blocked — use canvas
-      var f2=document.getElementById('tvFrame');if(f2)f2.remove();
-      cv.style.display='block';tvLoaded=false;
-      szCV();cvLoop(pid);
-    }
-  },3000);
+  // Clear old
+  var oldF=document.getElementById('tvFrame');if(oldF)oldF.remove();
+  if(cv)cv.style.display='none';
+  stopCht();
+  // TradingView widget
+  var wrap=document.createElement('div');wrap.id='tvFrame';wrap.style.cssText='width:100%;height:100%';
+  wrap.innerHTML='<div class="tradingview-widget-container" style="height:100%;width:100%"><div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div></div>';
+  area.appendChild(wrap);
+  var scr=document.createElement('script');
+  scr.type='text/javascript';
+  scr.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  scr.async=true;
+  scr.textContent=JSON.stringify({symbol:sym,interval:"1",timezone:"Etc/UTC",theme:th,style:"1",locale:"en",allow_symbol_change:false,save_image:false,hide_volume:false,support_host:"https://www.tradingview.com",width:"100%",height:"100%"});
+  wrap.querySelector('.tradingview-widget-container').appendChild(scr);
+  // Canvas fallback after 5s
+  setTimeout(function(){var f=area.querySelector('iframe');if(!f||f.clientHeight<10){var o=document.getElementById('tvFrame');if(o)o.remove();if(cv){cv.style.display='block';rszCht();chtLoop(pid)}}},5000);
 }
 function szCV(){if(!cv)return;var p=cv.parentElement;if(!p)return;var w=p.clientWidth,h=p.clientHeight,dpr=window.devicePixelRatio||1;if(w<1||h<1)return;cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+'px';cv.style.height=h+'px';cx.setTransform(dpr,0,0,dpr,0,0)}
 function drCV(pid){if(!cx||!cv)return;var w=cv.clientWidth,h=cv.clientHeight;if(w<10||h<10){szCV();w=cv.clientWidth;h=cv.clientHeight;if(w<10||h<10)return}
@@ -575,51 +567,64 @@ function resH(){for(var i=0;i<sh.length;i++){var h=sh[i];if(h.r==='PENDING'&&Dat
 function uStats(){var tot=sh.length,dn=0,wn=0;for(var i=0;i<sh.length;i++){if(sh[i].r!=='PENDING'){dn++;if(sh[i].r==='WIN')wn++}}document.getElementById('tT').textContent=tot;document.getElementById('tW').textContent=wn;document.getElementById('tR').textContent=dn>0?Math.round(wn/dn*100)+'%':'—';var e1=document.getElementById('pSg');if(e1)e1.textContent=tot;var e2=document.getElementById('pW');if(e2)e2.textContent=dn>0?Math.round(wn/dn*100)+'%':'—'}
 function renH(){var l=document.getElementById('hL');document.getElementById('hN').textContent=sh.length;if(!sh.length){l.innerHTML='<div class="emp">No signals yet</div>';return}var h='';for(var i=0;i<Math.min(sh.length,50);i++){var s=sh[i],rc=s.r==='WIN'?'win':s.r==='LOSS'?'loss':'pend',t=new Date(s.t).toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'});h+='<div class="hr"><span class="hp mono">'+s.sym+'</span><span class="ht '+(s.dir==='CALL'?'call':'put')+'">'+s.dir+'</span><span class="hcf mono">'+s.cf+'%</span><span class="ht '+rc+'">'+s.r+'</span><span class="htm mono">'+t+'</span></div>'}l.innerHTML=h}
 
-// AUTH — Telegram with multiple fallbacks
+// AUTH — Telegram auto + fallback
 var tgUser=null;
 var isTG=false;
 
-// Check if inside Telegram
-if(window.Telegram&&Telegram.WebApp){
-  isTG=true;
-  Telegram.WebApp.ready();
-  Telegram.WebApp.expand();
+// Detect Telegram environment
+try{
+  if(window.Telegram&&Telegram.WebApp){
+    isTG=true;
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+  }
+}catch(e){}
+
+function tryTGLogin(){
+  // Method 1: initDataUnsafe.user
+  try{
+    if(isTG&&Telegram.WebApp.initDataUnsafe&&Telegram.WebApp.initDataUnsafe.user){
+      tgUser=Telegram.WebApp.initDataUnsafe.user;
+      cu={username:tgUser.first_name||(tgUser.username||'User'),id:String(tgUser.id),tgUsername:tgUser.username||'',since:new Date().toLocaleDateString()};
+      var saved=G('fl_u_'+cu.id);if(saved){try{var o=JSON.parse(saved);cu.since=o.since||cu.since}catch(e){}}
+      S('fl_u_'+cu.id,JSON.stringify(cu));S('flash_user',JSON.stringify(cu));
+      return true;
+    }
+  }catch(e){}
+  // Method 2: initData exists (raw string) — we're in TG
+  try{
+    if(isTG&&Telegram.WebApp.initData&&Telegram.WebApp.initData.length>0){
+      cu={username:'Trader',id:'tg_'+Date.now(),tgUsername:'',since:new Date().toLocaleDateString()};
+      S('flash_user',JSON.stringify(cu));
+      return true;
+    }
+  }catch(e){}
+  // Method 3: platform check
+  try{
+    if(isTG&&Telegram.WebApp.platform){
+      cu={username:'Trader',id:'tg_'+Date.now(),tgUsername:'',since:new Date().toLocaleDateString()};
+      S('flash_user',JSON.stringify(cu));
+      return true;
+    }
+  }catch(e){}
+  return false;
 }
 
-// Try to get user data
-if(isTG&&Telegram.WebApp.initDataUnsafe&&Telegram.WebApp.initDataUnsafe.user){
-  tgUser=Telegram.WebApp.initDataUnsafe.user;
-  cu={
-    username:tgUser.first_name||(tgUser.username||'User'),
-    id:String(tgUser.id),
-    tgUsername:tgUser.username||'',
-    since:new Date().toLocaleDateString()
-  };
-  var savedData=G('fl_u_'+cu.id);
-  if(savedData){try{var old=JSON.parse(savedData);cu.since=old.since||cu.since}catch(e){}}
-  S('fl_u_'+cu.id,JSON.stringify(cu));
-  S('flash_user',JSON.stringify(cu));
-  enterApp();
-}else if(isTG){
-  // Inside Telegram but no user data yet — enter anyway with temp ID
-  var tempId='tg_'+Date.now();
-  cu={username:'Trader',id:tempId,tgUsername:'',since:new Date().toLocaleDateString()};
-  S('flash_user',JSON.stringify(cu));
+// Try login
+if(tryTGLogin()){
   enterApp();
 }else{
-  // Check saved login (returning user)
-  var saved=G('flash_user');
-  if(saved){
-    try{cu=JSON.parse(saved);if(cu&&cu.id){enterApp()}
-    else{document.getElementById('authContent').style.display='block';document.getElementById('authLoading').style.display='none'}}catch(e){document.getElementById('authContent').style.display='block';document.getElementById('authLoading').style.display='none'}
-  }else{
-    // Not in Telegram, no saved data
+  // Check saved session
+  var savedU=G('flash_user');
+  if(savedU){try{cu=JSON.parse(savedU);if(cu&&cu.id){enterApp()}else{document.getElementById('authContent').style.display='block'}}catch(e){document.getElementById('authContent').style.display='block'}}
+  else{
+    // Not in TG, no saved — show "Open in Telegram"
     document.getElementById('authContent').style.display='block';
-    document.getElementById('authLoading').style.display='none';
+    // Retry TG detection after 1 second (sometimes SDK loads slow)
+    if(isTG){setTimeout(function(){if(tryTGLogin())enterApp()},1500)}
   }
 }
 
-// NAV
 document.querySelectorAll('.nb').forEach(function(b){b.addEventListener('click',function(){var s=this.getAttribute('data-s');document.querySelectorAll('.sec').forEach(function(x){x.classList.remove('a')});document.getElementById('x'+s).classList.add('a');document.querySelectorAll('.nb').forEach(function(x){x.classList.toggle('a',x===b)});if(s==='H')renH()})});
 document.getElementById('sigB').addEventListener('click',doSig);
 document.getElementById('tT2').addEventListener('click',function(){setTh(document.body.getAttribute('data-theme')==='dark'?'light':'dark')});
@@ -888,5 +893,5 @@ setInterval(function(){if(document.getElementById('mSpin').classList.contains('s
 
 window.addEventListener('resize',function(){if(cv)szCV()});
 </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a03f22011e478d38',t:'MTc4MDE1ODcyNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a03f4e67ddb2d4ac',t:'MTc4MDE2MDU0Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
